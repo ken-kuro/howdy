@@ -138,7 +138,7 @@ def execute(config, gtk_proc, opencv):
 
 		# Parse and set the 2 required options for all rubberstamps
 		instance.options = {
-			"timeout": float(re.sub(r"[a-zA-Z]", "", regex_result.group(2))),
+			"timeout": float(re.sub("[a-zA-Z]", "", regex_result.group(2))),
 			"failsafe": regex_result.group(3) != "faildeadly"
 		}
 
