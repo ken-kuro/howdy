@@ -152,71 +152,8 @@ rotate = config.getint("video", "rotate", fallback=0)
 # Send the gtk output to the terminal if enabled in the config
 gtk_pipe = sys.stdout if gtk_stdout else subprocess.DEVNULL
 
-# Prepare environment for GTK process
+# Prepare environment for GTK process  
 gtk_env = os.environ.copy()
-
-# Try to find display information from various sources
-def find_display_info():
-	"""Try to find DISPLAY and XAUTHORITY from common locations"""
-	display = None
-	xauth = None
-	
-	# Check environment variables first
-	display = os.environ.get('DISPLAY')
-	xauth = os.environ.get('XAUTHORITY')
-	
-	if display and xauth:
-		return display, xauth
-	
-	# Try to find active X session information
-	try:
-		import pwd
-		import glob
-		
-		# Get the current user (the one being authenticated)
-		try:
-			user_info = pwd.getpwnam(user)
-			uid = user_info.pw_uid
-		except KeyError:
-			uid = None
-		
-		# Look for X11 session information in common locations
-		if not display:
-			# Try common display values
-			for disp in [':0', ':1', ':10']:
-				x11_lock = f'/tmp/.X{disp[1:]}-lock'
-				if os.path.exists(x11_lock):
-					display = disp
-					break
-		
-		if not xauth and uid:
-			# Look for Xauthority files
-			possible_xauth_paths = [
-				f'/run/user/{uid}/gdm/Xauthority',
-				f'/var/run/user/{uid}/gdm/Xauthority',
-				f'/home/{user}/.Xauthority',
-				f'/tmp/.gdm{uid}XX',
-			]
-			
-			for path_pattern in possible_xauth_paths:
-				for path in glob.glob(path_pattern):
-					if os.path.exists(path) and os.access(path, os.R_OK):
-						xauth = path
-						break
-				if xauth:
-					break
-	
-	except Exception:
-		# If anything fails in detection, just continue with None values
-		pass
-	
-	return display, xauth
-
-display, xauthority = find_display_info()
-if display:
-	gtk_env['DISPLAY'] = display
-if xauthority:
-	gtk_env['XAUTHORITY'] = xauthority
 
 # Start the auth ui, register it to be always be closed on exit
 try:
