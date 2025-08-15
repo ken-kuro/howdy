@@ -20,7 +20,19 @@ class RubberStamp:
 		if type == self.UI_SUBTEXT:
 			typedec = "S"
 
-		return self.send_ui_raw(typedec + "=" + text)
+		# Try to send to GTK UI first
+		result = self.send_ui_raw(typedec + "=" + text)
+		
+		# If GTK UI is not available, provide console feedback for user visibility
+		if not self.gtk_proc and text.strip():
+			if type == self.UI_SUBTEXT:
+				# Print subtext with indentation
+				print(f"  {text}")
+			else:
+				# Print main text
+				print(text)
+		
+		return result
 
 	def send_ui_raw(self, command):
 		"""Write raw command to howdy-gtk stdin"""
@@ -32,13 +44,27 @@ class RubberStamp:
 
 		# If we're connected to the ui
 		if self.gtk_proc:
-			# Send the command as bytes
-			self.gtk_proc.stdin.write(bytearray(command.encode("utf-8")))
-			self.gtk_proc.stdin.flush()
+			try:
+				# Check if the process is still running
+				if self.gtk_proc.poll() is None:
+					# Send the command as bytes
+					self.gtk_proc.stdin.write(bytearray(command.encode("utf-8")))
+					self.gtk_proc.stdin.flush()
 
-			# Write a padding line to force the command through any buffers
-			self.gtk_proc.stdin.write(bytearray("P=_PADDING \n".encode("utf-8")))
-			self.gtk_proc.stdin.flush()
+					# Write a padding line to force the command through any buffers
+					self.gtk_proc.stdin.write(bytearray("P=_PADDING \n".encode("utf-8")))
+					self.gtk_proc.stdin.flush()
+				else:
+					# Process is dead, disable UI communication
+					if self.config.getboolean("debug", "verbose_stamps", fallback=False):
+						print("GTK process died, disabling UI communication")
+					self.gtk_proc = None
+			except (BrokenPipeError, IOError, OSError) as e:
+				# Handle pipe errors gracefully
+				if self.config.getboolean("debug", "verbose_stamps", fallback=False):
+					print(f"Failed to send command to GTK UI: {e}")
+				# Disable further UI communication attempts
+				self.gtk_proc = None
 
 
 def execute(config, gtk_proc, opencv):
@@ -73,7 +99,7 @@ def execute(config, gtk_proc, opencv):
 			continue
 
 		# Parse the rule with regex
-		regex_result = re.search("^(\w+)\s+([\w\.]+)\s+([a-z]+)(.*)?$", rule, re.IGNORECASE)
+		regex_result = re.search(r"^(\w+)\s+([\w\.]+)\s+([a-z]+)(.*)?$", rule, re.IGNORECASE)
 
 		# Error out if the regex did not match (invalid line)
 		if not regex_result:
@@ -112,7 +138,7 @@ def execute(config, gtk_proc, opencv):
 
 		# Parse and set the 2 required options for all rubberstamps
 		instance.options = {
-			"timeout": float(re.sub("[a-zA-Z]", "", regex_result.group(2))),
+			"timeout": float(re.sub(r"[a-zA-Z]", "", regex_result.group(2))),
 			"failsafe": regex_result.group(3) != "faildeadly"
 		}
 
