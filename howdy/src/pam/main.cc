@@ -266,9 +266,28 @@ auto identify(pam_handle_t *pamh, int flags, int argc, const char **argv,
                               COMPARE_PROCESS_PATH, username, nullptr};
   pid_t child_pid;
 
-  // Start the python subprocess
+  // Prepare minimal environment for the spawned process
+  // We need to include at least PATH so that subprocess can find tools like sudo
+  std::vector<std::string> env_strings;
+  std::vector<const char*> env_pointers;
+  
+  // Always include PATH for the subprocess to find system tools
+  if (const char* path = getenv("PATH")) {
+    env_strings.push_back(std::string("PATH=") + path);
+  } else {
+    env_strings.push_back("PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin");
+  }
+  
+  // Convert to char* array for posix_spawnp
+  for (const auto& env_str : env_strings) {
+    env_pointers.push_back(env_str.c_str());
+  }
+  env_pointers.push_back(nullptr);
+
+  // Start the python subprocess with minimal environment
   if (posix_spawnp(&child_pid, PYTHON_EXECUTABLE_PATH, nullptr, nullptr,
-                   const_cast<char *const *>(args), nullptr) != 0) {
+                   const_cast<char *const *>(args), 
+                   const_cast<char *const *>(env_pointers.data())) != 0) {
     syslog(LOG_ERR, "Can't spawn the howdy process: %s (%d)", strerror(errno),
            errno);
     return PAM_SYSTEM_ERR;

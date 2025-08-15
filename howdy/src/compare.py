@@ -82,18 +82,19 @@ def send_to_ui(type, message):
 	"""Send message to the auth ui"""
 	global gtk_proc
 
-	# Only execute of the process started
-	if "gtk_proc" in globals():
+	# Only execute if the process started
+	if "gtk_proc" in globals() and gtk_proc is not None:
 		# Format message so the ui can parse it
-		message = type + "=" + message + " \n"
+		formatted_message = type + "=" + message + " \n"
 
 		# Try to send the message to the auth ui, but it's okay if that fails
 		try:
 			if gtk_proc.poll() is None: # Make sure the gtk_proc is still running before write into the pipe
-				gtk_proc.stdin.write(bytearray(message.encode("utf-8")))
+				gtk_proc.stdin.write(bytearray(formatted_message.encode("utf-8")))
 				gtk_proc.stdin.flush()
-		except IOError:
-			pass
+		except (BrokenPipeError, IOError, OSError):
+			# Handle pipe errors gracefully by disabling further communication
+			gtk_proc = None
 
 
 # Make sure we were given an username to test against
@@ -152,12 +153,85 @@ rotate = config.getint("video", "rotate", fallback=0)
 # Send the gtk output to the terminal if enabled in the config
 gtk_pipe = sys.stdout if gtk_stdout else subprocess.DEVNULL
 
+def find_actual_user():
+	"""Find the actual user who should own the GUI session"""
+	# When called via PAM, we might be running as root but authenticating another user
+	# The user argument passed to compare.py should be the target user
+	return user
+
+def start_gtk_ui():
+	"""Start the GTK UI, trying different approaches to handle environment issues"""
+	global gtk_proc
+	
+	actual_user = find_actual_user()
+	
+	# Approach 1: Try running howdy-gtk as the actual user to preserve their environment
+	# This should work for both X11 and Wayland as it uses the user's natural environment
+	try:
+		if config.getboolean("debug", "verbose_stamps", fallback=False):
+			print(f"Attempting to start GTK UI as user {actual_user}")
+		
+		gtk_proc = subprocess.Popen(
+			["sudo", "-u", actual_user, "howdy-gtk", "--start-auth-ui"], 
+			stdin=subprocess.PIPE, 
+			stdout=gtk_pipe, 
+			stderr=gtk_pipe
+		)
+		
+		# Give the process a moment to start and verify it's running
+		time.sleep(0.1)
+		if gtk_proc.poll() is not None:
+			# Process died immediately, try fallback
+			gtk_proc = None
+			raise subprocess.SubprocessError("GTK process died immediately")
+		
+		if config.getboolean("debug", "verbose_stamps", fallback=False):
+			print("Successfully started GTK UI in user context")
+		return True
+		
+	except (FileNotFoundError, subprocess.SubprocessError, PermissionError) as e:
+		if config.getboolean("debug", "verbose_stamps", fallback=False):
+			print(f"Failed to start GTK UI in user context: {e}")
+		gtk_proc = None
+	
+	# Approach 2: Try running directly (original approach, likely to fail in PAM context)
+	try:
+		if config.getboolean("debug", "verbose_stamps", fallback=False):
+			print("Attempting to start GTK UI directly")
+		
+		gtk_proc = subprocess.Popen(
+			["howdy-gtk", "--start-auth-ui"], 
+			stdin=subprocess.PIPE, 
+			stdout=gtk_pipe, 
+			stderr=gtk_pipe
+		)
+		
+		# Give the process a moment to start and verify it's running
+		time.sleep(0.1)
+		if gtk_proc.poll() is not None:
+			# Process died immediately
+			gtk_proc = None
+			if config.getboolean("debug", "verbose_stamps", fallback=False):
+				print("GTK UI process died immediately")
+		else:
+			if config.getboolean("debug", "verbose_stamps", fallback=False):
+				print("Successfully started GTK UI directly")
+			return True
+			
+	except (FileNotFoundError, PermissionError) as e:
+		if config.getboolean("debug", "verbose_stamps", fallback=False):
+			print(f"Failed to start GTK UI directly: {e}")
+		gtk_proc = None
+	
+	# If we get here, GTK UI failed to start
+	if config.getboolean("debug", "verbose_stamps", fallback=False):
+		print("GTK UI unavailable, will use console fallback for rubberstamps")
+	return False
+
 # Start the auth ui, register it to be always be closed on exit
-try:
-	gtk_proc = subprocess.Popen(["howdy-gtk", "--start-auth-ui"], stdin=subprocess.PIPE, stdout=gtk_pipe, stderr=gtk_pipe)
+gtk_started = start_gtk_ui()
+if gtk_started:
 	atexit.register(exit)
-except FileNotFoundError:
-	pass
 
 # Write to the stdin to redraw ui
 send_to_ui("M", _("Starting up..."))
